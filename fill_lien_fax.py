@@ -17,6 +17,7 @@ on its line even at the minimum font size, the line reads "See attached rider"
 and a rider page listing everything in full is appended after the form.
 """
 import json
+import os
 import sys
 from io import BytesIO
 
@@ -318,7 +319,6 @@ def main():
     spec = json.load(open(spec_path))
 
     overlay_buf, rider_lists = build_overlay(spec)
-    import os
     if form_path and os.path.exists(form_path):
         form = PdfReader(form_path)
         source = "official blank PDF"
@@ -334,9 +334,29 @@ def main():
     if rider_lists:
         for rp in PdfReader(build_rider(spec, rider_lists)).pages:
             writer.add_page(rp)
+    for pg in writer.pages:
+        pg.compress_content_streams()
     with open(out_path, "wb") as f:
         writer.write(f)
-    print(f"Wrote {out_path} using {source}" + (" (with rider page)" if rider_lists else ""))
+    shrink(out_path)
+    size_kb = os.path.getsize(out_path) / 1024
+    print(f"Wrote {out_path} ({size_kb:.0f} KB) using {source}" + (" (with rider page)" if rider_lists else ""))
+
+
+def shrink(path):
+    """Recompress with qpdf when available; keeps the file small enough to
+    base64 into an email attachment quickly. Silently skipped if qpdf is absent."""
+    import shutil
+    import subprocess
+    import tempfile
+    if not shutil.which("qpdf"):
+        return
+    tmp = tempfile.mktemp(suffix=".pdf")
+    r = subprocess.run(["qpdf", "--object-streams=generate", "--stream-data=compress",
+                        "--recompress-flate", "--compression-level=9", path, tmp],
+                       capture_output=True)
+    if r.returncode == 0 and os.path.getsize(tmp) < os.path.getsize(path):
+        shutil.move(tmp, path)
 
 
 if __name__ == "__main__":
